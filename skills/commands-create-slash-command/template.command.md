@@ -1,0 +1,9 @@
+---
+name: example-command
+description: Briefly describe what this slash command does.
+argument_hint: Optional free-form text after /example-command
+---
+
+Describe the work to perform here.
+
+$ARGUMENTS
