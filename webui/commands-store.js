@@ -340,7 +340,6 @@ const model = {
 
   async deleteCommand(command) {
     if (!command?.path) return;
-    if (!window.confirm(`Delete /${command.name}?`)) return;
 
     try {
       await callJsonApi(COMMANDS_API_PATH, {

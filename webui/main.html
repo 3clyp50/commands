@@ -88,7 +88,7 @@
                                             <button type="button" class="button icon" title="Duplicate command" @click="$store.commandsManager.duplicateCommand(command)">
                                                 <span class="material-symbols-outlined">content_copy</span>
                                             </button>
-                                            <button type="button" class="button icon danger" title="Delete command" @click="$store.commandsManager.deleteCommand(command)">
+                                            <button type="button" class="button icon danger" title="Delete command" @click.stop="$confirmClick($event, () => $store.commandsManager.deleteCommand(command))">
                                                 <span class="material-symbols-outlined">delete</span>
                                             </button>
                                         </div>
