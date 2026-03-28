@@ -127,11 +127,3 @@ Precedence in the chat picker:
 ## Agent Skill
 
 The plugin ships with `commands-create-slash-command`, a plugin-scoped skill that helps Agent Zero create or update command files.
-
-## Development
-
-Run the plugin test file with:
-
-```bash
-pytest usr/plugins/commands/tests/test_commands_plugin.py -q
-```
