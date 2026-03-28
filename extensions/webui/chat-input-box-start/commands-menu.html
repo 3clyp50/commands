@@ -9,6 +9,11 @@
         <template x-if="$store.commandsSlash">
             <div class="commands-slash-menu-root" x-create="$store.commandsSlash.onMount()" x-destroy="$store.commandsSlash.cleanup()">
                 <div class="commands-slash-menu" x-show="$store.commandsSlash.menuVisible" x-transition.opacity.duration.120ms>
+                    <div class="commands-slash-header">
+                        <span>Slash commands</span>
+                        <span class="commands-slash-project" x-text="$store.commandsSlash.projectBadgeLabel"></span>
+                    </div>
+
                     <template x-if="$store.commandsSlash.loading">
                         <div class="commands-slash-loading">
                             <span class="material-symbols-outlined spinning">progress_activity</span>
@@ -77,6 +82,32 @@
         .commands-slash-results {
             max-height: 18rem;
             overflow-y: auto;
+        }
+
+        .commands-slash-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.55rem 0.8rem;
+            border-bottom: 1px solid color-mix(in srgb, var(--color-border) 62%, transparent);
+            font-size: 0.76rem;
+            font-weight: 600;
+            color: var(--color-text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .commands-slash-project {
+            padding: 0.15rem 0.45rem;
+            border-radius: 999px;
+            border: 1px solid color-mix(in srgb, var(--color-highlight) 24%, transparent);
+            background: color-mix(in srgb, var(--color-highlight) 10%, transparent);
+            white-space: nowrap;
+            text-transform: none;
+            letter-spacing: normal;
+            font-size: 0.72rem;
+            color: var(--color-text-primary);
         }
 
         .commands-slash-item {

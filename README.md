@@ -1,57 +1,122 @@
 # Commands
 
-Markdown-backed slash commands for Agent Zero.
+YAML-configured slash commands for Agent Zero.
 
-This plugin lets you define reusable `/commands` as `.command.md` files, manage them from a dedicated modal, and insert them directly from the main chat composer when the first token starts with `/`.
+This plugin lets you define reusable `/commands` as `.command.yaml` files with either:
+
+- a `.txt` template body
+- a `.py` script hook
+
+Commands are managed from the plugin modal and can be inserted directly from the chat composer when the first token starts with `/`.
 
 ## Features
 
-- Markdown files are the source of truth, with YAML frontmatter for command metadata
-- Structured command manager with create, edit, duplicate, delete, refresh, and scope browsing
-- Slash picker above the inline composer with keyboard navigation and create-on-empty flow
-- Scope-aware command resolution across global, project, agent profile, and project+agent layers
-- Plugin-scoped skill so Agent Zero can create or update slash commands for you
+- `.command.yaml` config files with command metadata
+- Text template commands with `{}` placeholders and parsed args
+- Python hook commands with parsed args and optional chat history payload
+- Unified parser for positional args, free-form tail, and flags
+- Scope-aware command resolution across project and global scopes
+- Slash picker in the chat composer with keyboard navigation and create-on-empty flow
 
-## Command File Format
+## Command File Model
 
-```md
----
-name: explain-code
-description: Explain code clearly with examples
-argument_hint: Optional free-form text after /explain-code
----
-Explain the following:
+Each command is defined by one config file plus one content file in the same scope directory.
 
-$ARGUMENTS
+Example text command:
+
+`scan.command.yaml`
+
+```yaml
+name: scan
+description: Scan a Git repository.
+argument_hint: /scan --git-url https://github.com/org/repo
+type: text
+template_path: scan.txt
 ```
 
-Supported placeholders:
+`scan.txt`
 
-- `$ARGUMENTS`
-- `$0` through `$9`
+```txt
+Please scan repository: {args.flags.git_url}
 
-If a command body omits `$ARGUMENTS`, the typed tail is appended automatically as:
-
-```md
-Arguments:
-<typed text>
+Raw input:
+{raw}
 ```
+
+Example python hook command:
+
+`optimize.command.yaml`
+
+```yaml
+name: optimize
+description: Optimize the current request.
+argument_hint: /optimize 30%
+type: script
+script_path: optimize.py
+include_history: true
+```
+
+`optimize.py`
+
+```python
+def run(payload):
+    args = payload["arguments"]
+    pct = args["positional"][0] if args["positional"] else "10%"
+    return {
+        "text": f"Optimize this response by {pct}.",
+        "effects": [],
+    }
+```
+
+## Argument Parsing
+
+The parser supports:
+
+- Positional input: `/scan https://github.com/org/repo`
+- Long flags: `/scan --git-url https://github.com/org/repo`
+- Long flags with equals: `/scan --git-url=https://github.com/org/repo`
+- Short flags and bundles: `/scan -v -q` or `/scan -vq`
+
+Parsed data is available to:
+
+- Text templates via `{}` placeholders:
+  - `{raw}`
+  - `{args.positional.0}`
+  - `{args.flags.git_url}`
+- Python scripts via `payload["arguments"]`
+
+## Script Hook Contract
+
+Python hook file must expose:
+
+```python
+def run(payload): ...
+```
+
+It can return:
+
+- `str` (used as replacement text)
+- `dict` with:
+  - `text: str` (replacement text)
+  - `effects: list[dict]`
+
+Supported frontend effects:
+
+- `{"type": "replace_input", "text": "..."}`
+- `{"type": "append_input", "text": "..."}`
+- `{"type": "toast", "level": "info|error|success", "message": "..."}`
 
 ## Scope Resolution
 
 Commands are discovered from these scope folders:
 
-- Global: `usr/plugins/commands/commands/`
 - Project: `usr/projects/<project>/.a0proj/plugins/commands/commands/`
-- Agent profile: `usr/agents/<profile>/plugins/commands/commands/`
-- Project + agent profile: `usr/projects/<project>/.a0proj/agents/<profile>/plugins/commands/commands/`
+- Global fallback: `usr/plugins/commands/commands/`
 
 Precedence in the chat picker:
 
-1. Project + agent
-2. Project
-3. Agent profile
-4. Global
+1. Project
+2. Global
 
 ## UI Surfaces
 
@@ -61,7 +126,7 @@ Precedence in the chat picker:
 
 ## Agent Skill
 
-The plugin ships with `commands-create-slash-command`, a plugin-scoped skill that helps Agent Zero create or update command files while preserving unknown frontmatter keys.
+The plugin ships with `commands-create-slash-command`, a plugin-scoped skill that helps Agent Zero create or update command files.
 
 ## Development
 
@@ -70,5 +135,3 @@ Run the plugin test file with:
 ```bash
 pytest usr/plugins/commands/tests/test_commands_plugin.py -q
 ```
-
-When publishing this plugin as its own repository, place the contents of this folder at the repository root so `plugin.yaml`, `README.md`, and `LICENSE` sit at the top level.

@@ -2,13 +2,13 @@ import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
 import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
 import { store as chatInputStore } from "/components/chat/input/input-store.js";
+import {
+  toastFrontendError,
+  toastFrontendSuccess,
+} from "/components/notifications/notification-store.js";
 import { store as commandsManagerStore } from "/plugins/commands/webui/commands-store.js";
 
 const COMMANDS_API_PATH = "/plugins/commands/commands";
-
-function replaceAllLiteral(text, needle, replacement) {
-  return String(text || "").split(needle).join(replacement);
-}
 
 function sanitizeCommandName(rawName) {
   return (rawName || "")
@@ -18,32 +18,6 @@ function sanitizeCommandName(rawName) {
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/-{2,}/g, "-")
     .replace(/^[-_]+|[-_]+$/g, "");
-}
-
-function splitArguments(rawArguments) {
-  const matches = String(rawArguments || "").match(/"[^"]*"|'[^']*'|\S+/g) || [];
-  return matches.map((token) => token.replace(/^['"]|['"]$/g, ""));
-}
-
-function renderCommandTemplate(body, rawArguments) {
-  const template = body || "";
-  const argumentsText = String(rawArguments || "").trim();
-  let rendered = template;
-  const tokens = splitArguments(argumentsText);
-
-  for (let index = 0; index < 10; index += 1) {
-    rendered = replaceAllLiteral(rendered, `$${index}`, tokens[index] || "");
-  }
-
-  rendered = replaceAllLiteral(rendered, "$ARGUMENTS", argumentsText);
-
-  rendered = rendered.trim();
-  if (argumentsText && !template.includes("$ARGUMENTS")) {
-    const suffix = `Arguments:\n${argumentsText}`;
-    rendered = rendered ? `${rendered}\n\n${suffix}` : suffix;
-  }
-
-  return rendered.trim();
 }
 
 function parseSlashInput(message) {
@@ -66,10 +40,19 @@ function parseSlashInput(message) {
   };
 }
 
+function notifyError(message) {
+  void toastFrontendError(message, "Commands");
+}
+
+function notifySuccess(message) {
+  void toastFrontendSuccess(message, "Commands");
+}
+
 const model = {
   loading: false,
+  applying: false,
   commands: [],
-  contextScope: { project_name: "", agent_profile: "" },
+  contextScope: { project_name: "" },
   lastContextId: "",
   active: false,
   dismissed: false,
@@ -110,6 +93,11 @@ const model = {
     return name ? `Create /${name}` : "Create slash command";
   },
 
+  get projectBadgeLabel() {
+    const projectName = this.contextScope?.project_name || "";
+    return projectName ? `Project: ${projectName}` : "Project: Global";
+  },
+
   onMount() {
     this.ensureBindings();
 
@@ -142,6 +130,7 @@ const model = {
     this.rawArguments = "";
     this.rawMessage = "";
     this.selectedIndex = 0;
+    this.applying = false;
   },
 
   ensureBindings() {
@@ -173,9 +162,12 @@ const model = {
     return document.getElementById("chat-input");
   },
 
+  getContextId() {
+    return chatsStore?.getSelectedChatId?.() || globalThis.getContext?.() || "";
+  },
+
   async loadCommands(force = false) {
-    const contextId =
-      chatsStore?.getSelectedChatId?.() || globalThis.getContext?.() || "";
+    const contextId = this.getContextId();
 
     if (!force && this.commands.length && contextId === this.lastContextId) {
       this.ensureSelection();
@@ -191,14 +183,13 @@ const model = {
       this.commands = Array.isArray(response?.commands) ? response.commands : [];
       this.contextScope = response?.scope || {
         project_name: "",
-        agent_profile: "",
       };
       this.lastContextId = contextId;
       this.ensureSelection();
     } catch (error) {
       console.error("Failed to load effective commands:", error);
       this.commands = [];
-      this.contextScope = { project_name: "", agent_profile: "" };
+      this.contextScope = { project_name: "" };
     } finally {
       this.loading = false;
     }
@@ -258,7 +249,7 @@ const model = {
     if (event.key === "Enter" && this.selectedCommand) {
       event.preventDefault();
       event.stopPropagation();
-      this.applySelection(this.selectedCommand);
+      void this.applySelection(this.selectedCommand);
     }
   },
 
@@ -281,32 +272,86 @@ const model = {
     this.selectedIndex = nextIndex;
   },
 
-  applySelection(command) {
-    if (!command) return;
-
-    const rendered = renderCommandTemplate(command.body || "", this.rawArguments || "");
+  async applySelection(command) {
+    if (!command || this.applying) return;
     const input = this.getInputElement();
     if (!input) return;
 
-    input.value = rendered;
-    chatInputStore.message = rendered;
+    this.applying = true;
+    try {
+      const contextId = this.getContextId();
+      const fallbackSlash = this.rawMessage?.trim()
+        ? this.rawMessage
+        : this.rawArguments
+          ? `/${command.name} ${this.rawArguments}`
+          : `/${command.name}`;
+
+      const response = await callJsonApi(COMMANDS_API_PATH, {
+        action: "resolve",
+        path: command.path,
+        slash_text: fallbackSlash,
+        project_name: this.contextScope?.project_name || "",
+        context_id: contextId,
+      });
+
+      this.applyResolution(response?.resolution, input);
+      notifySuccess(`Applied /${command.name}`);
+    } catch (error) {
+      console.error("Failed to apply slash command:", error);
+      notifyError(error?.message || "Failed to apply slash command.");
+    } finally {
+      this.applying = false;
+    }
+  },
+
+  applyResolution(resolution, input) {
+    const result = resolution?.result || {};
+    const hasText = typeof result.text === "string";
+    let nextText = hasText ? result.text : input.value || "";
+    const effects = Array.isArray(result.effects) ? result.effects : [];
+
+    for (const effect of effects) {
+      if (!effect || typeof effect !== "object") continue;
+      const type = String(effect.type || "").trim().toLowerCase();
+      if (type === "replace_input") {
+        nextText = String(effect.text || "");
+        continue;
+      }
+      if (type === "append_input") {
+        const chunk = String(effect.text || "");
+        nextText = nextText ? `${nextText}\n${chunk}` : chunk;
+        continue;
+      }
+      if (type === "toast") {
+        const level = String(effect.level || "info").toLowerCase();
+        const message = String(effect.message || "");
+        if (!message) continue;
+        if (level === "error") {
+          notifyError(message);
+        } else {
+          notifySuccess(message);
+        }
+      }
+    }
+
+    input.value = nextText;
+    chatInputStore.message = nextText;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     chatInputStore.adjustTextareaHeight();
     input.focus();
-    input.setSelectionRange(rendered.length, rendered.length);
+    input.setSelectionRange(nextText.length, nextText.length);
 
     this.active = false;
     this.dismissed = false;
     this.query = "";
     this.rawArguments = "";
-    this.rawMessage = rendered;
+    this.rawMessage = nextText;
     this.selectedIndex = 0;
   },
 
   openCreateCommand() {
     commandsManagerStore.openManager({
       projectName: this.contextScope?.project_name || "",
-      agentProfile: this.contextScope?.agent_profile || "",
       prefillName: sanitizeCommandName(this.query || ""),
       openEditor: true,
     });

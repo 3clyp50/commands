@@ -13,7 +13,7 @@
                     <div class="commands-toolbar-copy">
                         <div class="commands-title">Slash Commands</div>
                         <div class="commands-subtitle">
-                            Markdown-backed commands for the inline chat composer.
+                            YAML-configured commands for the inline chat composer.
                         </div>
                     </div>
 
@@ -24,16 +24,6 @@
                                 <option value="">Global</option>
                                 <template x-for="project in $store.commandsManager.projects" :key="project.key">
                                     <option :value="project.key" x-text="project.label"></option>
-                                </template>
-                            </select>
-                        </label>
-
-                        <label class="commands-select">
-                            <span>Agent profile</span>
-                            <select x-model="$store.commandsManager.agentProfile" @change="$store.commandsManager.onScopeChanged()">
-                                <option value="">None</option>
-                                <template x-for="profile in $store.commandsManager.agentProfiles" :key="profile.key">
-                                    <option :value="profile.key" x-text="profile.label"></option>
                                 </template>
                             </select>
                         </label>
@@ -96,6 +86,7 @@
 
                                     <div class="commands-card-badges">
                                         <span class="commands-badge scope" x-text="command.scope_label"></span>
+                                        <span class="commands-badge type" x-text="command.command_type === 'script' ? 'Python Hook' : 'Text Template'"></span>
                                         <template x-if="command.override_count">
                                             <span class="commands-badge override" x-text="$store.commandsManager.overrideBadgeLabel(command)"></span>
                                         </template>
@@ -118,7 +109,7 @@
                         <div class="commands-empty-state">
                             <div class="commands-empty-title">No commands in this scope yet.</div>
                             <div class="commands-empty-copy">
-                                Create markdown-backed slash commands here and they will appear from <code>/</code> in chat.
+                                Create YAML-configured slash commands here and they will appear from <code>/</code> in chat.
                             </div>
                             <button type="button" class="button primary" @click="$store.commandsManager.openCreateCommand()">
                                 <span class="material-symbols-outlined">add</span>
@@ -305,6 +296,11 @@
         .commands-badge.override {
             background: color-mix(in srgb, #f39c12 12%, transparent);
             border-color: color-mix(in srgb, #f39c12 28%, transparent);
+        }
+
+        .commands-badge.type {
+            background: color-mix(in srgb, #5b8def 12%, transparent);
+            border-color: color-mix(in srgb, #5b8def 30%, transparent);
         }
 
         .commands-card-hint {

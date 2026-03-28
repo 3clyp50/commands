@@ -23,6 +23,8 @@ class Commands(ApiHandler):
             return self._duplicate(input)
         if action == "scope_info":
             return self._scope_info(input)
+        if action == "resolve":
+            return await self._resolve(input)
 
         return Response(status=400, response=f"Unknown action: {action}")
 
@@ -30,7 +32,6 @@ class Commands(ApiHandler):
         context_scope = commands_helper.get_context_scope(str(input.get("context_id", "") or ""))
         commands, scope = commands_helper.list_effective_commands(
             project_name=context_scope["project_name"],
-            agent_profile=context_scope["agent_profile"],
         )
         return {
             "ok": True,
@@ -41,7 +42,6 @@ class Commands(ApiHandler):
     def _list_scope(self, input: dict) -> dict | Response:
         commands, scope = commands_helper.list_scope_commands(
             project_name=str(input.get("project_name", "") or ""),
-            agent_profile=str(input.get("agent_profile", "") or ""),
         )
         return {
             "ok": True,
@@ -58,7 +58,6 @@ class Commands(ApiHandler):
             command = commands_helper.get_command(
                 path,
                 project_name=str(input.get("project_name", "") or ""),
-                agent_profile=str(input.get("agent_profile", "") or ""),
             )
         except FileNotFoundError:
             return Response(status=404, response="Command not found")
@@ -71,12 +70,13 @@ class Commands(ApiHandler):
         try:
             command = commands_helper.save_command(
                 project_name=str(input.get("project_name", "") or ""),
-                agent_profile=str(input.get("agent_profile", "") or ""),
                 existing_path=str(input.get("existing_path", "") or ""),
                 name=str(input.get("name", "") or ""),
                 description=str(input.get("description", "") or ""),
                 argument_hint=str(input.get("argument_hint", "") or ""),
+                command_type=str(input.get("command_type", "text") or "text"),
                 body=str(input.get("body", "") or ""),
+                include_history=bool(input.get("include_history", False)),
                 extra_frontmatter=input.get("extra_frontmatter", {}) or {},
             )
         except FileExistsError as error:
@@ -95,7 +95,6 @@ class Commands(ApiHandler):
             commands_helper.delete_command(
                 path,
                 project_name=str(input.get("project_name", "") or ""),
-                agent_profile=str(input.get("agent_profile", "") or ""),
             )
         except FileNotFoundError:
             return Response(status=404, response="Command not found")
@@ -113,7 +112,6 @@ class Commands(ApiHandler):
             command = commands_helper.duplicate_command(
                 path,
                 project_name=str(input.get("project_name", "") or ""),
-                agent_profile=str(input.get("agent_profile", "") or ""),
             )
         except FileNotFoundError:
             return Response(status=404, response="Command not found")
@@ -124,15 +122,12 @@ class Commands(ApiHandler):
 
     def _scope_info(self, input: dict) -> dict | Response:
         explicit_project = str(input.get("project_name", "") or "")
-        explicit_agent = str(input.get("agent_profile", "") or "")
         context_scope = commands_helper.get_context_scope(str(input.get("context_id", "") or ""))
 
         project_name = explicit_project if "project_name" in input else context_scope["project_name"]
-        agent_profile = explicit_agent if "agent_profile" in input else context_scope["agent_profile"]
 
         scope = commands_helper.get_scope_payload(
             project_name=project_name,
-            agent_profile=agent_profile,
             ensure_directory=bool(input.get("ensure_directory", False)),
         )
         return {
@@ -140,3 +135,26 @@ class Commands(ApiHandler):
             "scope": commands_helper.strip_private_scope(scope),
             "context_scope": context_scope,
         }
+
+    async def _resolve(self, input: dict) -> dict | Response:
+        path = str(input.get("path", "") or "")
+        if not path:
+            return Response(status=400, response="Missing path")
+
+        slash_text = str(input.get("slash_text", "") or "")
+        if not slash_text:
+            return Response(status=400, response="Missing slash_text")
+
+        try:
+            resolution = await commands_helper.resolve_command_invocation(
+                path=path,
+                slash_text=slash_text,
+                project_name=str(input.get("project_name", "") or ""),
+                context_id=str(input.get("context_id", "") or ""),
+            )
+        except FileNotFoundError:
+            return Response(status=404, response="Command not found")
+        except ValueError as error:
+            return Response(status=400, response=str(error))
+
+        return {"ok": True, "resolution": resolution}

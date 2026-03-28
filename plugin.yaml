@@ -1,7 +1,7 @@
 name: commands
 title: Commands
-description: Markdown-backed slash commands for the chat composer.
-version: 0.1.0
+description: YAML-configured slash commands with text templates or Python hooks.
+version: 0.2.0
 settings_sections: []
 per_project_config: false
 per_agent_config: false
