@@ -24,14 +24,14 @@ from usr.plugins.commands.helpers import commands as commands_helper
 class ScopeFixture:
     prefix: str
     project_name: str
-    agent_profile: str
     created_paths: list[str] = field(default_factory=list)
 
 
-def _track_command(scope: ScopeFixture, command: dict) -> dict:
-    command_path = files.fix_dev_path(command["path"])
-    if command_path not in scope.created_paths:
-        scope.created_paths.append(command_path)
+def _track_paths(scope: ScopeFixture, command: dict) -> dict:
+    for key in ("path", "config_path", "content_path"):
+        command_path = files.fix_dev_path(command.get(key, ""))
+        if command_path and command_path not in scope.created_paths:
+            scope.created_paths.append(command_path)
     return command
 
 
@@ -39,23 +39,25 @@ def _save_command(
     scope: ScopeFixture,
     *,
     project_name: str = "",
-    agent_profile: str = "",
     name: str,
     description: str,
     body: str = "",
     argument_hint: str = "",
+    command_type: str = "text",
+    include_history: bool = False,
     extra_frontmatter: dict | None = None,
 ) -> dict:
     command = commands_helper.save_command(
         project_name=project_name,
-        agent_profile=agent_profile,
         name=name,
         description=description,
         body=body,
         argument_hint=argument_hint,
+        command_type=command_type,
+        include_history=include_history,
         extra_frontmatter=extra_frontmatter or {},
     )
-    return _track_command(scope, command)
+    return _track_paths(scope, command)
 
 
 @pytest.fixture
@@ -64,7 +66,6 @@ def scope_fixture() -> ScopeFixture:
     scope = ScopeFixture(
         prefix=f"commands-test-{suffix}",
         project_name=f"commands_project_{suffix}",
-        agent_profile=f"commands-agent-{suffix}",
     )
 
     yield scope
@@ -73,7 +74,6 @@ def scope_fixture() -> ScopeFixture:
         files.delete_file(path)
 
     files.delete_dir(files.get_abs_path("usr", "projects", scope.project_name))
-    files.delete_dir(files.get_abs_path("usr", "agents", scope.agent_profile))
 
 
 def _new_handler() -> Commands:
@@ -82,20 +82,23 @@ def _new_handler() -> Commands:
     return Commands(app, threading.RLock())
 
 
-def test_command_file_name_and_unknown_frontmatter_round_trip(
+def test_command_config_and_template_files_round_trip(
     scope_fixture: ScopeFixture,
 ) -> None:
     command = _save_command(
         scope_fixture,
         name=f"Explain {scope_fixture.prefix}",
         description="Explain a code sample clearly.",
-        body="Explain the sample.\n\n$ARGUMENTS",
+        body="Explain the sample.\n\n{raw}",
         argument_hint="Paste code or describe the module.",
+        command_type="text",
         extra_frontmatter={"category": "analysis", "audience": "team"},
     )
 
-    command_path = Path(files.fix_dev_path(command["path"]))
-    assert command_path.name == f"explain-{scope_fixture.prefix}.command.md"
+    config_path = Path(files.fix_dev_path(command["path"]))
+    content_path = Path(files.fix_dev_path(command["content_path"]))
+    assert config_path.name == f"explain-{scope_fixture.prefix}.command.yaml"
+    assert content_path.name == f"explain-{scope_fixture.prefix}.txt"
 
     loaded = commands_helper.get_command(command["path"])
     assert loaded["frontmatter_extra"] == {
@@ -103,33 +106,46 @@ def test_command_file_name_and_unknown_frontmatter_round_trip(
         "audience": "team",
     }
 
-    markdown = files.read_file(str(command_path))
-    assert "category: analysis" in markdown
-    assert "audience: team" in markdown
-    assert f"name: explain-{scope_fixture.prefix}" in markdown
+    config_yaml = files.read_file(str(config_path))
+    assert "category: analysis" in config_yaml
+    assert "audience: team" in config_yaml
+    assert f"name: explain-{scope_fixture.prefix}" in config_yaml
+    assert "type: text" in config_yaml
+
+    template_text = files.read_file(str(content_path))
+    assert "Explain the sample." in template_text
 
 
-def test_render_command_body_supports_placeholders() -> None:
-    rendered = commands_helper.render_command_body(
-        "Topic: $0\n\nEverything:\n$ARGUMENTS\n\nThird: $2",
-        '"quoted phrase" alpha beta',
+def test_parse_arguments_and_render_template_support_flags() -> None:
+    parsed = commands_helper.parse_arguments(
+        '--git-url=https://github.com/acme/repo "quoted phrase" -v 30%'
     )
+    assert parsed["flags"]["git_url"] == "https://github.com/acme/repo"
+    assert parsed["flags"]["v"] is True
+    assert parsed["positional"] == ["quoted phrase", "30%"]
 
+    invocation = commands_helper.parse_slash_invocation(
+        '/optimize 30% --mode fast --git-url=https://github.com/acme/repo'
+    )
+    rendered = commands_helper.render_text_template(
+        "Pct: {args.positional.0}\nMode: {args.flags.mode}\nURL: {args.flags.git_url}\nRaw: {raw}",
+        invocation,
+    )
     assert rendered == (
-        'Topic: quoted phrase\n\nEverything:\n"quoted phrase" alpha beta\n\nThird: beta'
+        "Pct: 30%\n"
+        "Mode: fast\n"
+        "URL: https://github.com/acme/repo\n"
+        "Raw: 30% --mode fast --git-url=https://github.com/acme/repo"
     )
 
-    appended = commands_helper.render_command_body("Summarize this request.", "alpha beta")
+    appended = commands_helper.render_text_template(
+        "Summarize this request.",
+        commands_helper.parse_slash_invocation("/summarize alpha beta"),
+    )
     assert appended == "Summarize this request.\n\nArguments:\nalpha beta"
 
-    literal_dollar = commands_helper.render_command_body(
-        "Echo:\n$ARGUMENTS",
-        "$1 literal",
-    )
-    assert literal_dollar == "Echo:\n$1 literal"
 
-
-def test_list_effective_commands_respects_scope_precedence(
+def test_list_effective_commands_project_overrides_global(
     scope_fixture: ScopeFixture,
 ) -> None:
     shared_name = f"{scope_fixture.prefix}-shared"
@@ -139,86 +155,46 @@ def test_list_effective_commands_respects_scope_precedence(
         name=shared_name,
         description="global description",
         body="global body",
-    )
-    _save_command(
-        scope_fixture,
-        project_name="",
-        agent_profile=scope_fixture.agent_profile,
-        name=shared_name,
-        description="agent description",
-        body="agent body",
+        command_type="text",
     )
     _save_command(
         scope_fixture,
         project_name=scope_fixture.project_name,
-        agent_profile="",
         name=shared_name,
         description="project description",
         body="project body",
-    )
-    _save_command(
-        scope_fixture,
-        project_name=scope_fixture.project_name,
-        agent_profile=scope_fixture.agent_profile,
-        name=shared_name,
-        description="project+agent description",
-        body="project+agent body",
+        command_type="text",
     )
 
-    project_agent_commands, _ = commands_helper.list_effective_commands(
-        scope_fixture.project_name,
-        scope_fixture.agent_profile,
-    )
     project_commands, _ = commands_helper.list_effective_commands(
-        scope_fixture.project_name,
-        "",
+        scope_fixture.project_name
     )
-    agent_commands, _ = commands_helper.list_effective_commands(
-        "",
-        scope_fixture.agent_profile,
-    )
-    global_commands, _ = commands_helper.list_effective_commands("", "")
+    global_commands, _ = commands_helper.list_effective_commands("")
 
-    assert {command["name"]: command for command in project_agent_commands}[shared_name][
-        "description"
-    ] == "project+agent description"
     assert {command["name"]: command for command in project_commands}[shared_name][
         "description"
     ] == "project description"
-    assert {command["name"]: command for command in agent_commands}[shared_name][
-        "description"
-    ] == "agent description"
     assert {command["name"]: command for command in global_commands}[shared_name][
         "description"
     ] == "global description"
 
-    scoped_commands, _ = commands_helper.list_scope_commands(
-        scope_fixture.project_name,
-        scope_fixture.agent_profile,
-    )
+    scoped_commands, _ = commands_helper.list_scope_commands(scope_fixture.project_name)
     scoped_command = next(
         command for command in scoped_commands if command["name"] == shared_name
     )
-    assert scoped_command["override_count"] == 3
-    assert scoped_command["override_scopes"] == ["Project", "Agent", "Global"]
+    assert scoped_command["override_count"] == 1
+    assert scoped_command["override_scopes"] == ["Global"]
 
 
 @pytest.mark.asyncio
-async def test_commands_api_crud_and_context_scope_resolution(
+async def test_commands_api_crud_and_resolve_text_and_script(
     scope_fixture: ScopeFixture,
 ) -> None:
     handler = _new_handler()
     command_name = f"{scope_fixture.prefix}-context"
 
-    global_command = _save_command(
-        scope_fixture,
-        name=command_name,
-        description="global command",
-        body="global body",
-    )
-
     context = AgentContext(
-        config=initialize_agent({"agent_profile": scope_fixture.agent_profile}),
+        config=initialize_agent({}),
         set_current=True,
     )
     context.set_data(projects.CONTEXT_DATA_KEY_PROJECT, scope_fixture.project_name)
@@ -228,22 +204,25 @@ async def test_commands_api_crud_and_context_scope_resolution(
             {
                 "action": "save",
                 "project_name": scope_fixture.project_name,
-                "agent_profile": scope_fixture.agent_profile,
                 "name": command_name,
                 "description": "context override",
-                "body": "context body",
+                "command_type": "text",
+                "body": (
+                    "Repo: {args.flags.git_url}\n"
+                    "Mode: {args.flags.mode}\n"
+                    "Raw: {raw}"
+                ),
             },
             None,
         )
         assert isinstance(saved, dict)
         assert saved["ok"] is True
-        saved_command = _track_command(scope_fixture, saved["command"])
+        saved_command = _track_paths(scope_fixture, saved["command"])
 
         loaded = await handler.process(
             {
                 "action": "get",
                 "project_name": scope_fixture.project_name,
-                "agent_profile": scope_fixture.agent_profile,
                 "path": saved_command["path"],
             },
             None,
@@ -251,11 +230,72 @@ async def test_commands_api_crud_and_context_scope_resolution(
         assert isinstance(loaded, dict)
         assert loaded["command"]["description"] == "context override"
 
+        resolved_text = await handler.process(
+            {
+                "action": "resolve",
+                "project_name": scope_fixture.project_name,
+                "path": saved_command["path"],
+                "slash_text": f"/{command_name} --git-url=https://github.com/acme/repo --mode deep",
+                "context_id": context.id,
+            },
+            None,
+        )
+        assert isinstance(resolved_text, dict)
+        assert resolved_text["ok"] is True
+        rendered_text = resolved_text["resolution"]["result"]["text"]
+        assert "Repo: https://github.com/acme/repo" in rendered_text
+        assert "Mode: deep" in rendered_text
+
+        script_saved = await handler.process(
+            {
+                "action": "save",
+                "project_name": scope_fixture.project_name,
+                "name": f"{command_name}-script",
+                "description": "script command",
+                "command_type": "script",
+                "include_history": True,
+                "body": (
+                    "def run(payload):\n"
+                    "    flags = payload['arguments'].get('flags', {})\n"
+                    "    return {\n"
+                    "        'text': f\"Script mode: {flags.get('mode', 'none')}\",\n"
+                    "        'effects': [\n"
+                    "            {'type': 'toast', 'level': 'success', 'message': 'Script executed'}\n"
+                    "        ],\n"
+                    "    }\n"
+                ),
+            },
+            None,
+        )
+        assert isinstance(script_saved, dict)
+        assert script_saved["ok"] is True
+        script_command = _track_paths(scope_fixture, script_saved["command"])
+
+        resolved_script = await handler.process(
+            {
+                "action": "resolve",
+                "project_name": scope_fixture.project_name,
+                "path": script_command["path"],
+                "slash_text": f"/{command_name}-script --mode turbo",
+                "context_id": context.id,
+            },
+            None,
+        )
+        assert isinstance(resolved_script, dict)
+        assert resolved_script["ok"] is True
+        assert resolved_script["resolution"]["result"]["text"] == "Script mode: turbo"
+        assert resolved_script["resolution"]["result"]["effects"] == [
+            {
+                "type": "toast",
+                "level": "success",
+                "message": "Script executed",
+            }
+        ]
+
         duplicated = await handler.process(
             {
                 "action": "duplicate",
                 "project_name": scope_fixture.project_name,
-                "agent_profile": scope_fixture.agent_profile,
                 "path": saved_command["path"],
             },
             None,
@@ -263,20 +303,7 @@ async def test_commands_api_crud_and_context_scope_resolution(
         assert isinstance(duplicated, dict)
         assert duplicated["ok"] is True
         assert duplicated["command"]["name"].startswith(f"{command_name}-copy")
-        duplicated_command = _track_command(scope_fixture, duplicated["command"])
-
-        scoped_list = await handler.process(
-            {
-                "action": "list_scope",
-                "project_name": scope_fixture.project_name,
-                "agent_profile": scope_fixture.agent_profile,
-            },
-            None,
-        )
-        assert isinstance(scoped_list, dict)
-        scoped_names = {command["name"] for command in scoped_list["commands"]}
-        assert saved_command["name"] in scoped_names
-        assert duplicated_command["name"] in scoped_names
+        duplicated_command = _track_paths(scope_fixture, duplicated["command"])
 
         effective_list = await handler.process(
             {"action": "list_effective", "context_id": context.id},
@@ -287,7 +314,7 @@ async def test_commands_api_crud_and_context_scope_resolution(
             command["name"]: command for command in effective_list["commands"]
         }
         assert effective_by_name[command_name]["description"] == "context override"
-        assert effective_by_name[command_name]["source_scope_key"] == "project_agent"
+        assert effective_by_name[command_name]["source_scope_key"] == "project"
 
         scope_info = await handler.process(
             {"action": "scope_info", "context_id": context.id},
@@ -295,33 +322,17 @@ async def test_commands_api_crud_and_context_scope_resolution(
         )
         assert isinstance(scope_info, dict)
         assert scope_info["scope"]["project_name"] == scope_fixture.project_name
-        assert scope_info["scope"]["agent_profile"] == scope_fixture.agent_profile
 
         deleted = await handler.process(
             {
                 "action": "delete",
                 "project_name": scope_fixture.project_name,
-                "agent_profile": scope_fixture.agent_profile,
                 "path": duplicated_command["path"],
             },
             None,
         )
         assert isinstance(deleted, dict)
         assert deleted["ok"] is True
-
-        after_delete = await handler.process(
-            {
-                "action": "list_scope",
-                "project_name": scope_fixture.project_name,
-                "agent_profile": scope_fixture.agent_profile,
-            },
-            None,
-        )
-        assert isinstance(after_delete, dict)
-        assert duplicated_command["name"] not in {
-            command["name"] for command in after_delete["commands"]
-        }
-        assert global_command["name"] == command_name
     finally:
         AgentContext.remove(context.id)
         AgentContext.set_current("")

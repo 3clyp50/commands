@@ -14,7 +14,7 @@
                     <div class="commands-editor-copy">
                         <div class="commands-editor-title" x-text="$store.commandsManager.editorTitle"></div>
                         <div class="commands-editor-subtitle">
-                            Saving writes the underlying <code>.command.md</code> file for <span x-text="$store.commandsManager.selectedScopeLabel"></span>.
+                            Saving writes a <code>.command.yaml</code> config plus a template file in <span x-text="$store.commandsManager.selectedScopeLabel"></span>.
                         </div>
                     </div>
                 </div>
@@ -43,20 +43,57 @@
                            placeholder="Optional free-form text after /command">
                 </label>
 
+                <div class="commands-editor-grid">
+                    <label class="commands-field">
+                        <span>Command type</span>
+                        <select x-model="$store.commandsManager.editor.commandType"
+                                @change="$store.commandsManager.setEditorType($store.commandsManager.editor.commandType)">
+                            <option value="text">Text template (.txt)</option>
+                            <option value="script">Python hook (.py)</option>
+                        </select>
+                    </label>
+
+                    <template x-if="$store.commandsManager.editor.commandType === 'script'">
+                        <label class="commands-field commands-field-checkbox">
+                            <span>Script context</span>
+                            <div class="commands-checkbox-inline">
+                                <input type="checkbox" x-model="$store.commandsManager.editor.includeHistory">
+                                <span>Include chat history payload</span>
+                            </div>
+                        </label>
+                    </template>
+                </div>
+
                 <label class="commands-field commands-field-body">
-                    <span>Markdown body</span>
+                    <span x-text="$store.commandsManager.editorBodyLabel"></span>
                     <textarea x-model="$store.commandsManager.editor.body"
                               rows="14"
-                              placeholder="Write the reusable prompt body here. Use $ARGUMENTS or $0..$9 for typed arguments."></textarea>
+                              :placeholder="$store.commandsManager.editor.commandType === 'script'
+                                ? 'Implement run(payload) and return { text, effects }.'
+                                : 'Write reusable text. Use {raw}, {args.positional.0}, {args.flags.some_flag}.'"></textarea>
                 </label>
 
-                <div class="commands-editor-help">
-                    <span class="commands-help-chip">$ARGUMENTS</span>
-                    <span class="commands-help-chip">$0..$9</span>
-                    <span class="commands-help-copy">
-                        If the body omits <code>$ARGUMENTS</code>, trailing input is appended as an <code>Arguments:</code> block.
-                    </span>
-                </div>
+                <template x-if="$store.commandsManager.editor.commandType === 'text'">
+                    <div class="commands-editor-help">
+                        <span class="commands-help-chip">{raw}</span>
+                        <span class="commands-help-chip">{args.positional.0}</span>
+                        <span class="commands-help-chip">{args.flags.git_url}</span>
+                        <span class="commands-help-copy">
+                            Trailing command input is parsed once and exposed to template placeholders and python payloads.
+                        </span>
+                    </div>
+                </template>
+
+                <template x-if="$store.commandsManager.editor.commandType === 'script'">
+                    <div class="commands-editor-help">
+                        <span class="commands-help-chip">run(payload)</span>
+                        <span class="commands-help-chip">payload.arguments</span>
+                        <span class="commands-help-chip">result.effects</span>
+                        <span class="commands-help-copy">
+                            Return a string or <code>{ text, effects }</code>. Effects support <code>replace_input</code>, <code>append_input</code>, and <code>toast</code>.
+                        </span>
+                    </div>
+                </template>
 
                 <template x-if="$store.commandsManager.editor.path">
                     <div class="commands-editor-path">
@@ -131,6 +168,27 @@
         .commands-field textarea,
         .commands-field input {
             width: 100%;
+        }
+
+        .commands-field select {
+            width: 100%;
+        }
+
+        .commands-field-checkbox {
+            justify-content: flex-end;
+        }
+
+        .commands-checkbox-inline {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            color: var(--color-text-primary);
+            font-size: 0.86rem;
+            font-weight: 500;
+        }
+
+        .commands-checkbox-inline input {
+            width: auto;
         }
 
         .commands-field-body textarea {
