@@ -19,6 +19,8 @@ function createEmptyEditor() {
     name: "",
     description: "",
     argumentHint: "",
+    commandType: "text",
+    includeHistory: false,
     body: "",
     extraFrontmatter: {},
   };
@@ -42,8 +44,21 @@ function sanitizeCommandName(rawName) {
     .replace(/^[-_]+|[-_]+$/g, "");
 }
 
-function buildDefaultBody() {
-  return "Describe the work to perform here.\n\n$ARGUMENTS";
+function buildDefaultBody(commandType = "text") {
+  if (commandType === "script") {
+    return [
+      "def run(payload):",
+      "    args = payload.get('arguments', {})",
+      "    flags = args.get('flags', {})",
+      "    positional = args.get('positional', [])",
+      "    return {",
+      "        'text': f\"Script command received args: {positional} flags: {flags}\",",
+      "        'effects': [],",
+      "    }",
+      "",
+    ].join("\n");
+  }
+  return "Describe the work to perform here.\n\n{raw}";
 }
 
 function notifyError(message) {
@@ -62,11 +77,9 @@ const model = {
   loading: false,
   saving: false,
   projects: [],
-  agentProfiles: [],
   projectName: "",
-  agentProfile: "",
   scope: null,
-  contextScope: { project_name: "", agent_profile: "" },
+  contextScope: { project_name: "" },
   commands: [],
   pendingScope: null,
   pendingCreate: null,
@@ -93,15 +106,16 @@ const model = {
     return this._serializeEditor() !== this.editorSnapshot;
   },
 
+  get editorBodyLabel() {
+    return this.editor.commandType === "script" ? "Python hook" : "Text template";
+  },
+
   openManager(options = {}) {
-    const hasExplicitScope =
-      Object.prototype.hasOwnProperty.call(options, "projectName") ||
-      Object.prototype.hasOwnProperty.call(options, "agentProfile");
+    const hasExplicitScope = Object.prototype.hasOwnProperty.call(options, "projectName");
 
     this.pendingScope = hasExplicitScope
       ? {
           projectName: options.projectName || "",
-          agentProfile: options.agentProfile || "",
         }
       : null;
 
@@ -116,7 +130,7 @@ const model = {
   },
 
   async onOpen() {
-    await Promise.all([this.loadProjects(), this.loadAgentProfiles()]);
+    await this.loadProjects();
 
     try {
       await this.resolveInitialScope();
@@ -139,11 +153,9 @@ const model = {
     this.loading = false;
     this.saving = false;
     this.projects = [];
-    this.agentProfiles = [];
     this.projectName = "";
-    this.agentProfile = "";
     this.scope = null;
-    this.contextScope = { project_name: "", agent_profile: "" };
+    this.contextScope = { project_name: "" };
     this.commands = [];
     this.pendingScope = null;
     this.pendingCreate = null;
@@ -159,26 +171,10 @@ const model = {
     }
   },
 
-  async loadAgentProfiles() {
-    try {
-      const response = await callJsonApi("agents", { action: "list" });
-      this.agentProfiles = Array.isArray(response?.data) ? response.data : [];
-    } catch {
-      this.agentProfiles = [];
-    }
-  },
-
   normalizeProject(projectName) {
     if (!projectName) return "";
     return (this.projects || []).some((project) => project?.key === projectName)
       ? projectName
-      : "";
-  },
-
-  normalizeAgentProfile(agentProfile) {
-    if (!agentProfile) return "";
-    return (this.agentProfiles || []).some((profile) => profile?.key === agentProfile)
-      ? agentProfile
       : "";
   },
 
@@ -192,14 +188,10 @@ const model = {
 
     this.contextScope = scopeInfo?.context_scope || {
       project_name: "",
-      agent_profile: "",
     };
 
     const preferredScope = this.pendingScope || scopeInfo?.scope || {};
     this.projectName = this.normalizeProject(preferredScope.project_name || "");
-    this.agentProfile = this.normalizeAgentProfile(
-      preferredScope.agent_profile || "",
-    );
     this.pendingScope = null;
   },
 
@@ -210,7 +202,6 @@ const model = {
       const response = await callJsonApi(COMMANDS_API_PATH, {
         action: "list_scope",
         project_name: this.projectName || "",
-        agent_profile: this.agentProfile || "",
       });
 
       this.commands = Array.isArray(response?.commands) ? response.commands : [];
@@ -231,7 +222,6 @@ const model = {
 
   async onScopeChanged() {
     this.projectName = this.normalizeProject(this.projectName);
-    this.agentProfile = this.normalizeAgentProfile(this.agentProfile);
     await this.loadCommands();
   },
 
@@ -249,7 +239,6 @@ const model = {
       const response = await callJsonApi(COMMANDS_API_PATH, {
         action: "scope_info",
         project_name: this.projectName || "",
-        agent_profile: this.agentProfile || "",
         ensure_directory: true,
       });
       if (response?.scope?.directory_path) {
@@ -264,15 +253,6 @@ const model = {
   async openCreateCommand(options = {}) {
     if (Object.prototype.hasOwnProperty.call(options, "projectName")) {
       this.projectName = this.normalizeProject(options.projectName || "");
-    }
-    if (Object.prototype.hasOwnProperty.call(options, "agentProfile")) {
-      this.agentProfile = this.normalizeAgentProfile(options.agentProfile || "");
-    }
-
-    if (
-      Object.prototype.hasOwnProperty.call(options, "projectName") ||
-      Object.prototype.hasOwnProperty.call(options, "agentProfile")
-    ) {
       await this.loadCommands();
     }
 
@@ -281,7 +261,8 @@ const model = {
       ...createEmptyEditor(),
       mode: "create",
       name: suggestedName,
-      body: buildDefaultBody(),
+      commandType: "text",
+      body: buildDefaultBody("text"),
     };
     this.editorSnapshot = this._serializeEditor();
     await this.openEditorModal();
@@ -295,7 +276,6 @@ const model = {
         action: "get",
         path: command.path,
         project_name: this.projectName || "",
-        agent_profile: this.agentProfile || "",
       });
       const loaded = response?.command || command;
       this.editor = {
@@ -305,6 +285,8 @@ const model = {
         name: loaded.name || "",
         description: loaded.description || "",
         argumentHint: loaded.argument_hint || "",
+        commandType: loaded.command_type || "text",
+        includeHistory: Boolean(loaded.include_history),
         body: loaded.body || "",
         extraFrontmatter: loaded.frontmatter_extra || {},
       };
@@ -324,7 +306,6 @@ const model = {
         action: "duplicate",
         path: command.path,
         project_name: this.projectName || "",
-        agent_profile: this.agentProfile || "",
       });
       await this.loadCommands();
       emitCommandsUpdated();
@@ -346,7 +327,6 @@ const model = {
         action: "delete",
         path: command.path,
         project_name: this.projectName || "",
-        agent_profile: this.agentProfile || "",
       });
       await this.loadCommands();
       emitCommandsUpdated();
@@ -371,6 +351,23 @@ const model = {
     await window.closeModal?.(EDITOR_MODAL_PATH);
   },
 
+  setEditorType(nextType) {
+    const normalizedType = nextType === "script" ? "script" : "text";
+    if (this.editor.commandType === normalizedType) return;
+    const previousType = this.editor.commandType || "text";
+    const previousDefault = buildDefaultBody(previousType);
+    const shouldReplaceBody =
+      !String(this.editor.body || "").trim() ||
+      String(this.editor.body || "") === previousDefault;
+
+    this.editor.commandType = normalizedType;
+    this.editor.includeHistory =
+      normalizedType === "script" ? this.editor.includeHistory : false;
+    if (shouldReplaceBody) {
+      this.editor.body = buildDefaultBody(normalizedType);
+    }
+  },
+
   async saveEditor() {
     this.saving = true;
 
@@ -378,11 +375,13 @@ const model = {
       const response = await callJsonApi(COMMANDS_API_PATH, {
         action: "save",
         project_name: this.projectName || "",
-        agent_profile: this.agentProfile || "",
         existing_path: this.editor.existingPath || "",
         name: this.editor.name || "",
         description: this.editor.description || "",
         argument_hint: this.editor.argumentHint || "",
+        command_type: this.editor.commandType || "text",
+        include_history:
+          this.editor.commandType === "script" ? Boolean(this.editor.includeHistory) : false,
         body: this.editor.body || "",
         extra_frontmatter: this.editor.extraFrontmatter || {},
       });
@@ -415,6 +414,8 @@ const model = {
       name: this.editor.name || "",
       description: this.editor.description || "",
       argumentHint: this.editor.argumentHint || "",
+      commandType: this.editor.commandType || "text",
+      includeHistory: Boolean(this.editor.includeHistory),
       body: this.editor.body || "",
       extraFrontmatter: this.editor.extraFrontmatter || {},
     });
