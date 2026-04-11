@@ -487,8 +487,10 @@ def _load_yaml_command_file(
         command_name, command_type
     )
     content_abs_path = files.get_abs_path(directory_path, configured_content_path)
-    scope_root = get_scope_directory(project_name, "")
-    if not files.is_in_dir(content_abs_path, scope_root):
+    # Content file must live in the same directory as its config file.
+    # Using directory_path (not the project scope root) allows global commands
+    # to load correctly even when a project context is active.
+    if not files.is_in_dir(content_abs_path, directory_path):
         return None
 
     try:
@@ -577,8 +579,9 @@ def _validate_command_path(
     agent_profile: str = "",
 ) -> str:
     command_path = _to_abs_path(path)
-    scope_root = get_scope_directory(project_name, "")
-    if not files.is_in_dir(command_path, scope_root):
+    # Allow commands from any effective scope (project overrides global, but global is also valid)
+    valid_roots = [get_scope_directory(scope, "") for scope in _iter_precedence_scopes(project_name)]
+    if not any(files.is_in_dir(command_path, scope_root) for scope_root in valid_roots):
         raise ValueError("Command path is outside the selected scope")
     if not (
         command_path.endswith(COMMAND_CONFIG_SUFFIX)
