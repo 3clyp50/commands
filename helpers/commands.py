@@ -345,7 +345,15 @@ def get_command(
 
     """
     command_path = _validate_command_path(path, project_name, "")
-    command = _load_command_file(command_path, project_name=project_name)
+    # Determine actual scope from the resolved path to get correct metadata.
+    # A global command loaded with a project context must report scope=global.
+    actual_project = ""
+    for scope in _iter_precedence_scopes(project_name):
+        scope_dir = get_scope_directory(scope, "")
+        if files.is_in_dir(command_path, scope_dir):
+            actual_project = scope
+            break
+    command = _load_command_file(command_path, project_name=actual_project)
     if not command:
         raise ValueError("Command file is invalid or missing required configuration")
     return command
