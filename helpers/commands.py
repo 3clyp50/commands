@@ -37,6 +37,21 @@ _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_.-]+)\}")
 
 
 def sanitize_command_name(raw_name: str) -> str:
+    """Normalize a raw command name into a lowercase, hyphenated slug.
+
+    Strips leading/trailing whitespace, converts spaces to hyphens,
+    removes any character that is not a lowercase letter, digit,
+    underscore, or hyphen, and collapses consecutive hyphens.
+
+    Args:
+        raw_name: The unnormalized command name.
+
+    Returns:
+        A sanitized, lowercase slug suitable for use as a file-name stem.
+
+    Raises:
+        ValueError: If the result is empty (no alphanumeric characters).
+    """
     name = (raw_name or "").strip().lower().replace(" ", "-")
     name = _INVALID_COMMAND_CHARS_RE.sub("-", name)
     name = _MULTI_DASH_RE.sub("-", name).strip("-_")
@@ -46,6 +61,17 @@ def sanitize_command_name(raw_name: str) -> str:
 
 
 def normalize_command_type(raw_type: str) -> str:
+    """Return a validated command type string.
+
+    Args:
+        raw_type: The raw type value (defaults to ``"text"`` when empty).
+
+    Returns:
+        ``"text"`` or ``"script"``.
+
+    Raises:
+        ValueError: If *raw_type* is neither ``"text"`` nor ``"script"``.
+    """
     command_type = (raw_type or "text").strip().lower()
     if command_type not in {"text", "script"}:
         raise ValueError('Command type must be either "text" or "script"')
@@ -53,10 +79,29 @@ def normalize_command_type(raw_type: str) -> str:
 
 
 def command_file_name(command_name: str) -> str:
+    """Return the config file name for a command.
+
+    Args:
+        command_name: The unnormalized command name.
+
+    Returns:
+        A filename like ``"my-cmd.command.yaml"``.
+    """
     return f"{sanitize_command_name(command_name)}{COMMAND_CONFIG_SUFFIX}"
 
 
 def command_content_file_name(command_name: str, command_type: str) -> str:
+    """Return the content file name for a command.
+
+    For text commands the suffix is ``.txt``; for script commands ``.py``.
+
+    Args:
+        command_name: The unnormalized command name.
+        command_type: ``"text"`` or ``"script"``.
+
+    Returns:
+        A filename like ``"my-cmd.txt"`` or ``"my-cmd.py"``.
+    """
     suffix = (
         TEXT_TEMPLATE_SUFFIX
         if normalize_command_type(command_type) == "text"
@@ -66,6 +111,20 @@ def command_content_file_name(command_name: str, command_type: str) -> str:
 
 
 def parse_slash_invocation(raw_message: str, *, fallback_command: str = "") -> dict[str, Any]:
+    """Parse a slash-command invocation from a raw user message.
+
+    If *raw_message* starts with ``/<name>``, the name and remaining
+    text are extracted.  Otherwise *fallback_command* is used as the
+    name and the entire message becomes arguments.
+
+    Args:
+        raw_message: The raw text the user submitted.
+        fallback_command: Command name to use when no slash prefix is found.
+
+    Returns:
+        A dict with keys ``raw_text``, ``command_name``, ``raw_arguments``,
+        and ``arguments`` (the parsed result of :func:`parse_arguments`).
+    """
     text = (raw_message or "").strip()
     slash_match = re.match(r"^/([^\s]+)(?:\s+([\s\S]*))?$", text)
     if slash_match:
@@ -88,6 +147,17 @@ def parse_slash_invocation(raw_message: str, *, fallback_command: str = "") -> d
 
 
 def parse_arguments(raw_arguments: str) -> dict[str, Any]:
+    """Tokenize and parse positional arguments and flags.
+
+    Supports ``--key=value``, ``--flag``, ``-abc`` short-flag bundles,
+    and ``"quoted phrases"``.
+
+    Args:
+        raw_arguments: The raw argument string.
+
+    Returns:
+        A dict with keys ``raw``, ``tokens``, ``positional``, and ``flags``.
+    """
     normalized_arguments = (raw_arguments or "").strip()
     tokens = _split_arguments(normalized_arguments)
     positional: list[str] = []
@@ -125,6 +195,21 @@ def render_command_body(
     command_name: str = "",
     raw_message: str = "",
 ) -> str:
+    """Render a command body template with the given arguments.
+
+    Parses the arguments (or raw_message) into an invocation dict,
+    then delegates to :func:`render_text_template`.
+
+    Args:
+        body: The template text containing ``{placeholder}`` tokens.
+        raw_arguments: The raw argument string.
+        command_name: Fallback command name when no slash prefix is present.
+        raw_message: Optional full raw message; overrides *raw_arguments*
+            for parsing when provided.
+
+    Returns:
+        The rendered template string.
+    """
     invocation = parse_slash_invocation(
         raw_message or raw_arguments,
         fallback_command=command_name,
@@ -136,6 +221,19 @@ def render_command_body(
 
 
 def render_text_template(body: str, invocation: dict[str, Any]) -> str:
+    """Render a text template using an invocation context.
+
+    Replaces ``{placeholder}`` tokens, then legacy ``$0``–``$9`` and
+    ``$ARGUMENTS`` placeholders.  If the template does not reference
+    arguments and raw arguments are present, they are appended.
+
+    Args:
+        body: The template text.
+        invocation: A parsed invocation dict (from :func:`parse_slash_invocation`).
+
+    Returns:
+        The fully rendered and trimmed template string.
+    """
     template = body or ""
     rendered = template
 
@@ -156,18 +254,45 @@ def render_text_template(body: str, invocation: dict[str, Any]) -> str:
 
 
 def get_scope_key(project_name: str = "", agent_profile: str = "") -> str:
+    """Return the scope key for the given project.
+
+    Args:
+        project_name: Active project name, or empty for global scope.
+        agent_profile: Unused; reserved for future agent-level scoping.
+
+    Returns:
+        ``"project"`` when a project name is provided, else ``"global"``.
+    """
     if project_name:
         return "project"
     return "global"
 
 
 def get_scope_label(project_name: str = "", agent_profile: str = "") -> str:
+    """Return a human-readable scope label.
+
+    Args:
+        project_name: Active project name, or empty for global scope.
+        agent_profile: Unused; reserved for future agent-level scoping.
+
+    Returns:
+        ``"Project"`` or ``"Global"``.
+    """
     if project_name:
         return "Project"
     return "Global"
 
 
 def get_scope_directory(project_name: str = "", agent_profile: str = "") -> str:
+    """Return the filesystem directory for the given scope.
+
+    Args:
+        project_name: Active project name, or empty for global scope.
+        agent_profile: Unused; reserved for future agent-level scoping.
+
+    Returns:
+        Absolute path to the scope's ``commands/`` directory.
+    """
     return plugins.determine_plugin_asset_path(
         PLUGIN_NAME,
         project_name,
@@ -177,6 +302,15 @@ def get_scope_directory(project_name: str = "", agent_profile: str = "") -> str:
 
 
 def ensure_scope_directory(project_name: str = "", agent_profile: str = "") -> str:
+    """Return the scope directory, creating it (and parents) if missing.
+
+    Args:
+        project_name: Active project name, or empty for global scope.
+        agent_profile: Unused; reserved for future agent-level scoping.
+
+    Returns:
+        Absolute path to the (now guaranteed) ``commands/`` directory.
+    """
     directory = get_scope_directory(project_name, "")
     Path(directory).mkdir(parents=True, exist_ok=True)
     return directory
@@ -188,6 +322,17 @@ def get_scope_payload(
     *,
     ensure_directory: bool = False,
 ) -> dict[str, Any]:
+    """Build a metadata dict describing a scope.
+
+    Args:
+        project_name: Active project name, or empty for global scope.
+        agent_profile: Unused; reserved for future agent-level scoping.
+        ensure_directory: If ``True``, create the directory before returning.
+
+    Returns:
+        A dict with keys ``project_name``, ``scope_key``, ``scope_label``,
+        ``directory_path``, ``exists``, and ``_directory_abs_path``.
+    """
     directory_path = (
         ensure_scope_directory(project_name, "")
         if ensure_directory
@@ -204,6 +349,15 @@ def get_scope_payload(
 
 
 def get_context_scope(context_id: str = "") -> dict[str, str]:
+    """Return the project scope for the given (or current) context.
+
+    Args:
+        context_id: Agent-context UUID.  When empty the current context
+            is used.
+
+    Returns:
+        A dict with key ``project_name`` (possibly empty).
+    """
     context = _get_context(context_id)
     if not context:
         return {"project_name": ""}
@@ -217,6 +371,18 @@ def list_scope_commands(
     project_name: str = "",
     agent_profile: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """List commands that belong to a single scope.
+
+    Each command includes ``override_scopes`` and ``override_count``
+    metadata showing where lower-precedence scopes shadow it.
+
+    Args:
+        project_name: Active project name, or empty for global scope.
+        agent_profile: Unused; reserved for future agent-level scoping.
+
+    Returns:
+        A tuple of ``(commands_list, scope_metadata)``.
+    """
     scope = get_scope_payload(project_name, "")
     commands = _load_scope_commands(project_name)
     overrides = _collect_lower_scope_matches(project_name)
@@ -233,12 +399,28 @@ def list_effective_commands(
     project_name: str = "",
     agent_profile: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """List the merged, effective command set across all scopes.
+
+    Commands are merged by name with project scope taking precedence
+    over global scope, and plugin commands having the lowest precedence.
+
+    Args:
+        project_name: Active project name, or empty for global scope.
+        agent_profile: Unused; reserved for future agent-level scoping.
+
+    Returns:
+        A tuple of ``(sorted_commands, scope_metadata)``.
+    """
     resolved_scope = get_scope_payload(project_name, "")
     merged: dict[str, dict[str, Any]] = {}
 
     for scope_project in _iter_precedence_scopes(project_name):
         for command in _load_scope_commands(scope_project):
             merged.setdefault(command["name"], command)
+
+    # Plugin commands — lowest precedence
+    for command in _discover_plugin_commands():
+        merged.setdefault(command["name"], command)
 
     effective = sorted(merged.values(), key=lambda item: item["name"])
     return effective, strip_private_scope(resolved_scope)
@@ -249,8 +431,35 @@ def get_command(
     project_name: str = "",
     agent_profile: str = "",
 ) -> dict[str, Any]:
+    """Load a single command by its config file path.
+
+    The command is validated against all precedence scopes (project,
+    global, plugin).  Metadata reflects the *actual* scope of the
+    resolved path, not the caller's active project.
+
+    Args:
+        path: Path to a ``.command.yaml`` or ``.command.md`` file.
+        project_name: Active project name (used for scope resolution).
+        agent_profile: Unused; reserved for future agent-level scoping.
+
+    Returns:
+        A dict describing the command.
+
+    Raises:
+        FileNotFoundError: If the config file does not exist.
+        ValueError: If the path is outside valid scopes or the file
+            is invalid.
+    """
     command_path = _validate_command_path(path, project_name, "")
-    command = _load_command_file(command_path, project_name=project_name)
+    # Determine actual scope from the resolved path so global commands
+    # are labelled correctly even when a project is active.
+    actual_project = ""
+    for scope in _iter_precedence_scopes(project_name):
+        scope_dir = get_scope_directory(scope, "")
+        if files.is_in_dir(command_path, scope_dir):
+            actual_project = scope
+            break
+    command = _load_command_file(command_path, project_name=actual_project)
     if not command:
         raise ValueError("Command file is invalid or missing required configuration")
     return command
@@ -269,6 +478,31 @@ def save_command(
     include_history: bool = False,
     extra_frontmatter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Create or update a command in the given scope.
+
+    When *existing_path* is provided the command at that path is
+    replaced (rename-safe).  Otherwise a new command is created.
+
+    Args:
+        project_name: Scope project (empty for global).
+        agent_profile: Unused; reserved for future agent-level scoping.
+        existing_path: Path of an existing config to replace.
+        name: Human-readable command name.
+        description: Short description of what the command does.
+        argument_hint: Help text shown for argument input.
+        command_type: ``"text"`` or ``"script"``.
+        body: Template body (text commands) or Python source (script).
+        include_history: Whether to inject chat history into script payload.
+        extra_frontmatter: Additional YAML keys to merge into the config.
+
+    Returns:
+        The saved command dict (as if from :func:`get_command`).
+
+    Raises:
+        ValueError: If *name* or *description* is empty.
+        FileExistsError: If a different command already occupies the
+            target filename.
+    """
     command_name = sanitize_command_name(name)
     command_description = (description or "").strip()
     if not command_description:
@@ -340,6 +574,17 @@ def delete_command(
     project_name: str = "",
     agent_profile: str = "",
 ) -> None:
+    """Delete a command and its associated content file.
+
+    Args:
+        path: Path to the command config file.
+        project_name: Active project name for scope resolution.
+        agent_profile: Unused; reserved for future agent-level scoping.
+
+    Raises:
+        FileNotFoundError: If the config file does not exist.
+        ValueError: If the path is outside valid scopes.
+    """
     command = get_command(path, project_name, "")
     command_path = _validate_command_path(path, project_name, "")
     files.delete_file(command_path)
@@ -354,6 +599,18 @@ def duplicate_command(
     project_name: str = "",
     agent_profile: str = "",
 ) -> dict[str, Any]:
+    """Create a copy of an existing command with a generated name.
+
+    The duplicate is saved in the same scope as the original.
+
+    Args:
+        path: Path to the source command config.
+        project_name: Active project name for scope resolution.
+        agent_profile: Unused; reserved for future agent-level scoping.
+
+    Returns:
+        The newly created command dict.
+    """
     command = get_command(path, project_name, "")
     duplicated_name = _generate_duplicate_name(command["name"], project_name=project_name)
     return save_command(
@@ -375,6 +632,20 @@ async def resolve_command_invocation(
     project_name: str = "",
     context_id: str = "",
 ) -> dict[str, Any]:
+    """Resolve a slash invocation into its final rendered result.
+
+    For text commands the template is rendered synchronously.
+    For script commands the ``run(payload)`` hook is awaited.
+
+    Args:
+        path: Path to the command config file.
+        slash_text: The raw slash text (e.g. ``"/build arg1 arg2"``).
+        project_name: Active project name for scope resolution.
+        context_id: Agent-context UUID (passed to script hooks).
+
+    Returns:
+        A dict with keys ``command``, ``invocation``, and ``result``.
+    """
     command = get_command(path, project_name, "")
     invocation = parse_slash_invocation(slash_text, fallback_command=command["name"])
 
@@ -487,9 +758,11 @@ def _load_yaml_command_file(
         command_name, command_type
     )
     content_abs_path = files.get_abs_path(directory_path, configured_content_path)
-    scope_root = get_scope_directory(project_name, "")
-    if not files.is_in_dir(content_abs_path, scope_root):
-        return None
+    # Validate content_path is co-located with config (same directory)
+    if not files.is_in_dir(content_abs_path, directory_path):
+        # Also allow commands from any plugin's commands/ directory
+        if not _is_plugin_commands_dir(content_abs_path):
+            return None
 
     try:
         body = files.read_file(content_abs_path)
@@ -577,8 +850,18 @@ def _validate_command_path(
     agent_profile: str = "",
 ) -> str:
     command_path = _to_abs_path(path)
-    scope_root = get_scope_directory(project_name, "")
-    if not files.is_in_dir(command_path, scope_root):
+    # Check all precedence scopes (project + global), not just one
+    valid_scope = False
+    for scope_project in _iter_precedence_scopes(project_name):
+        scope_root = get_scope_directory(scope_project, "")
+        if files.is_in_dir(command_path, scope_root):
+            valid_scope = True
+            break
+    if not valid_scope:
+        # Allow commands from any plugin's commands/ directory
+        if _is_plugin_commands_dir(command_path):
+            valid_scope = True
+    if not valid_scope:
         raise ValueError("Command path is outside the selected scope")
     if not (
         command_path.endswith(COMMAND_CONFIG_SUFFIX)
@@ -620,6 +903,28 @@ def _load_scope_commands(project_name: str = "") -> list[dict[str, Any]]:
 
     commands.sort(key=lambda item: item["name"])
     return commands
+
+def _discover_plugin_commands() -> list[dict[str, Any]]:
+    """Discover commands from all plugins that have a commands/ directory."""
+    commands: list[dict[str, Any]] = []
+    for plugin_name in plugins.get_plugins_list():
+        if plugin_name == PLUGIN_NAME:
+            continue
+        plugin_dir = plugins.find_plugin_dir(plugin_name)
+        if not plugin_dir:
+            continue
+        plugin_commands_dir = files.get_abs_path(plugin_dir, COMMANDS_DIR)
+        if not os.path.isdir(plugin_commands_dir):
+            continue
+        for file_path in _list_scope_files(plugin_commands_dir):
+            command = _load_command_file(file_path, project_name="")
+            if command:
+                command["source_plugin"] = plugin_name
+                command["source_scope_key"] = "plugin"
+                command["source_scope_label"] = f"Plugin: {plugin_name}"
+                commands.append(command)
+    return commands
+
 
 
 def _collect_lower_scope_matches(project_name: str = "") -> dict[str, list[str]]:
@@ -886,8 +1191,29 @@ def _get_context(context_id: str = "") -> AgentContext | None:
 def _to_abs_path(path: str) -> str:
     return files.fix_dev_path(path)
 
+def _is_plugin_commands_dir(path: str) -> bool:
+    """Check if a path is inside any installed plugin's commands/ subdirectory."""
+    abs_path = _to_abs_path(path) if not os.path.isabs(path) else path
+    for plugin_name in plugins.get_plugins_list():
+        plugin_dir = plugins.find_plugin_dir(plugin_name)
+        if not plugin_dir:
+            continue
+        plugin_commands_dir = files.get_abs_path(plugin_dir, COMMANDS_DIR)
+        if files.is_in_dir(abs_path, plugin_commands_dir):
+            return True
+    return False
+
+
 
 def strip_private_scope(scope: dict[str, Any]) -> dict[str, Any]:
+    """Remove keys starting with ``_`` from a scope payload dict.
+
+    Args:
+        scope: A scope metadata dict.
+
+    Returns:
+        A new dict without private keys.
+    """
     return {key: value for key, value in scope.items() if not key.startswith("_")}
 
 
