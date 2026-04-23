@@ -75,17 +75,26 @@ def _write_plugin_command(
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
-def test_discover_plugin_commands_finds_a0_agent_skills():
-    """Real plugin a0_agent_skills has commands — they must be discovered."""
+def test_discover_plugin_commands_finds_plugin_commands(fake_plugin: dict):
+    """Plugin commands must be discovered without relying on real installs."""
+    _write_plugin_command(
+        fake_plugin,
+        name=f"{fake_plugin['name']}-build",
+        description="build test",
+    )
+
     discovered = commands_helper._discover_plugin_commands()
     names = {c["name"] for c in discovered}
-    assert "build" in names, f"Expected 'build' in discovered names, got {names}"
+    expected = commands_helper.sanitize_command_name(f"{fake_plugin['name']}-build")
+    assert expected in names, f"Expected {expected!r} in discovered names, got {names}"
 
     for cmd in discovered:
-        if cmd["name"] == "build":
-            assert cmd["source_plugin"] == "a0_agent_skills"
+        if cmd["name"] == expected:
+            assert cmd["source_plugin"] == fake_plugin["name"]
+            assert cmd["scope_key"] == "plugin"
+            assert cmd["scope_label"] == f"Plugin: {fake_plugin['name']}"
             assert cmd["source_scope_key"] == "plugin"
-            assert "Plugin:" in cmd["source_scope_label"]
+            assert cmd["source_scope_label"] == f"Plugin: {fake_plugin['name']}"
             break
 
 
@@ -96,11 +105,20 @@ def test_discover_plugin_commands_skips_own_plugin():
         assert cmd.get("source_plugin") != "commands"
 
 
-def test_list_effective_includes_plugin_commands():
+def test_list_effective_includes_plugin_commands(fake_plugin: dict):
     """list_effective_commands must include commands from other plugins."""
+    _write_plugin_command(
+        fake_plugin,
+        name=f"{fake_plugin['name']}-effective",
+        description="effective test",
+    )
+
     effective, _ = commands_helper.list_effective_commands("")
-    effective_names = {c["name"] for c in effective}
-    assert "build" in effective_names
+    expected = commands_helper.sanitize_command_name(f"{fake_plugin['name']}-effective")
+    command = next((item for item in effective if item["name"] == expected), None)
+    assert command is not None
+    assert command["scope_key"] == "plugin"
+    assert command["scope_label"] == f"Plugin: {fake_plugin['name']}"
 
 
 def test_plugin_commands_appear_in_effective_list(fake_plugin: dict):
@@ -113,9 +131,10 @@ def test_plugin_commands_appear_in_effective_list(fake_plugin: dict):
     )
 
     effective, _ = commands_helper.list_effective_commands("")
-    names = {c["name"] for c in effective}
     expected = commands_helper.sanitize_command_name(f"{fake_plugin['name']}-hello")
-    assert expected in names
+    command = next((item for item in effective if item["name"] == expected), None)
+    assert command is not None
+    assert command["source_plugin"] == fake_plugin["name"]
 
 
 def test_precedence_global_overrides_plugin(fake_plugin: dict):
@@ -162,7 +181,10 @@ def test_source_plugin_field_on_discovered_command(fake_plugin: dict):
     match = next((c for c in discovered if c["name"] == slug), None)
     assert match is not None
     assert match["source_plugin"] == fake_plugin["name"]
+    assert match["scope_key"] == "plugin"
+    assert match["scope_label"] == f"Plugin: {fake_plugin['name']}"
     assert match["source_scope_key"] == "plugin"
+    assert match["source_scope_label"] == f"Plugin: {fake_plugin['name']}"
 
 
 def test_is_plugin_commands_dir_recognises_plugin_path(fake_plugin: dict):
@@ -174,13 +196,15 @@ def test_is_plugin_commands_dir_recognises_plugin_path(fake_plugin: dict):
     )
     slug = commands_helper.sanitize_command_name(f"{fake_plugin['name']}-path-check")
     config_path = os.path.join(fake_plugin["commands_dir"], f"{slug}.command.yaml")
+    normalized = commands_helper._normalize_client_path(config_path)
 
-    assert commands_helper._is_plugin_commands_dir(config_path) is True
+    assert commands_helper._is_plugin_commands_dir(normalized) is True
 
 
-def test_is_plugin_commands_dir_rejects_non_plugin_path():
+def test_is_plugin_commands_dir_rejects_non_plugin_path(tmp_path: Path):
     """_is_plugin_commands_dir must return False for arbitrary paths."""
-    assert commands_helper._is_plugin_commands_dir("/tmp/not-a-plugin/commands/foo.txt") is False
+    non_plugin_path = tmp_path / "not-a-plugin" / "commands" / "foo.txt"
+    assert commands_helper._is_plugin_commands_dir(str(non_plugin_path)) is False
 
 
 def test_get_command_can_load_plugin_command(fake_plugin: dict):
@@ -195,7 +219,46 @@ def test_get_command_can_load_plugin_command(fake_plugin: dict):
     config_path = os.path.join(fake_plugin["commands_dir"], f"{slug}.command.yaml")
     normalized = commands_helper._normalize_client_path(config_path)
 
-    command = commands_helper.get_command(normalized)
+    command = commands_helper.get_command(normalized, project_name="demo-project")
     assert command["name"] == slug
     assert command["description"] == "loadable test"
     assert command["body"] == "load me"
+    assert command["source_plugin"] == fake_plugin["name"]
+    assert command["scope_key"] == "plugin"
+    assert command["scope_label"] == f"Plugin: {fake_plugin['name']}"
+    assert command["source_scope_key"] == "plugin"
+    assert command["source_scope_label"] == f"Plugin: {fake_plugin['name']}"
+
+
+def test_save_command_rejects_plugin_existing_path(fake_plugin: dict):
+    """Editing a plugin command must fail because plugin commands are read-only."""
+    config_path = _write_plugin_command(
+        fake_plugin,
+        name=f"{fake_plugin['name']}-readonly-edit",
+        description="read-only test",
+        body="plugin body",
+    )
+    normalized = commands_helper._normalize_client_path(config_path)
+
+    with pytest.raises(ValueError, match="Plugin commands are read-only"):
+        commands_helper.save_command(
+            existing_path=normalized,
+            name=f"{fake_plugin['name']}-readonly-edit",
+            description="updated description",
+            body="updated body",
+        )
+
+
+def test_delete_command_rejects_plugin_command(fake_plugin: dict):
+    """Deleting a plugin command must fail because plugin commands are read-only."""
+    config_path = _write_plugin_command(
+        fake_plugin,
+        name=f"{fake_plugin['name']}-readonly-delete",
+        description="read-only delete",
+    )
+    normalized = commands_helper._normalize_client_path(config_path)
+
+    with pytest.raises(ValueError, match="Plugin commands are read-only"):
+        commands_helper.delete_command(normalized)
+
+    assert os.path.exists(config_path)
