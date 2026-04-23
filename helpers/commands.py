@@ -37,6 +37,15 @@ _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_.-]+)\}")
 
 
 def sanitize_command_name(raw_name: str) -> str:
+    """Sanitize a raw command name to a lowercase, hyphen-separated slug.
+
+        Strips whitespace, lowercases, replaces spaces and invalid characters with hyphens,
+        collapses consecutive hyphens, and strips leading/trailing hyphens and underscores.
+
+        Raises:
+            ValueError: If the resulting name is empty.
+
+    """
     name = (raw_name or "").strip().lower().replace(" ", "-")
     name = _INVALID_COMMAND_CHARS_RE.sub("-", name)
     name = _MULTI_DASH_RE.sub("-", name).strip("-_")
@@ -46,6 +55,7 @@ def sanitize_command_name(raw_name: str) -> str:
 
 
 def normalize_command_type(raw_type: str) -> str:
+    """Normalize a command type string to either ``"text"`` or ``"script"``."""
     command_type = (raw_type or "text").strip().lower()
     if command_type not in {"text", "script"}:
         raise ValueError('Command type must be either "text" or "script"')
@@ -53,10 +63,12 @@ def normalize_command_type(raw_type: str) -> str:
 
 
 def command_file_name(command_name: str) -> str:
+    """Return the ``.command.yaml`` config filename for *command_name*."""
     return f"{sanitize_command_name(command_name)}{COMMAND_CONFIG_SUFFIX}"
 
 
 def command_content_file_name(command_name: str, command_type: str) -> str:
+    """Return the content filename (``.txt`` or ``.py``) for *command_name* and *command_type*."""
     suffix = (
         TEXT_TEMPLATE_SUFFIX
         if normalize_command_type(command_type) == "text"
@@ -66,6 +78,16 @@ def command_content_file_name(command_name: str, command_type: str) -> str:
 
 
 def parse_slash_invocation(raw_message: str, *, fallback_command: str = "") -> dict[str, Any]:
+    """Parse a raw slash-command message into its component parts.
+
+        Returns a dict with keys: ``raw_text``, ``command_name``, ``raw_arguments``,
+        and ``arguments`` (parsed by :func:`parse_arguments`).
+
+        Args:
+            raw_message: The full message string, e.g. ``"/scan --url https://example.com"``.
+            fallback_command: Command name to use when no slash prefix is found.
+
+    """
     text = (raw_message or "").strip()
     slash_match = re.match(r"^/([^\s]+)(?:\s+([\s\S]*))?$", text)
     if slash_match:
@@ -88,6 +110,14 @@ def parse_slash_invocation(raw_message: str, *, fallback_command: str = "") -> d
 
 
 def parse_arguments(raw_arguments: str) -> dict[str, Any]:
+    """Parse a raw argument string into positional args, flags, and tokens.
+
+        Supports positional values, long flags (``--key value``, ``--key=value``),
+        short flags (``-f``), and short flag bundles (``-vq``).
+
+        Returns a dict with keys: ``raw``, ``tokens``, ``positional``, ``flags``.
+
+    """
     normalized_arguments = (raw_arguments or "").strip()
     tokens = _split_arguments(normalized_arguments)
     positional: list[str] = []
@@ -125,6 +155,15 @@ def render_command_body(
     command_name: str = "",
     raw_message: str = "",
 ) -> str:
+    """Render *body* as a text template substituting placeholders from *raw_arguments*.
+
+        Args:
+            body: Template string with ``{placeholder}`` markers.
+            raw_arguments: Unparsed argument string from the command invocation.
+            command_name: Optional command name used for slash-invocation parsing fallback.
+            raw_message: Full original message; when provided takes precedence over raw_arguments.
+
+    """
     invocation = parse_slash_invocation(
         raw_message or raw_arguments,
         fallback_command=command_name,
@@ -136,6 +175,12 @@ def render_command_body(
 
 
 def render_text_template(body: str, invocation: dict[str, Any]) -> str:
+    """Render *body* as a template substituting placeholders from *invocation* context.
+
+        Unrecognised placeholders resolve to empty string. If *raw_arguments* is present
+        and the template contains no argument references, the arguments are appended.
+
+    """
     template = body or ""
     rendered = template
 
@@ -156,18 +201,21 @@ def render_text_template(body: str, invocation: dict[str, Any]) -> str:
 
 
 def get_scope_key(project_name: str = "", agent_profile: str = "") -> str:
+    """Return the scope identifier key: ``'project'`` when a project is active, else ``'global'``."""
     if project_name:
         return "project"
     return "global"
 
 
 def get_scope_label(project_name: str = "", agent_profile: str = "") -> str:
+    """Return the human-readable scope label: ``'Project'`` or ``'Global'``."""
     if project_name:
         return "Project"
     return "Global"
 
 
 def get_scope_directory(project_name: str = "", agent_profile: str = "") -> str:
+    """Return the absolute filesystem path to the commands directory for the given scope."""
     return plugins.determine_plugin_asset_path(
         PLUGIN_NAME,
         project_name,
@@ -177,6 +225,11 @@ def get_scope_directory(project_name: str = "", agent_profile: str = "") -> str:
 
 
 def ensure_scope_directory(project_name: str = "", agent_profile: str = "") -> str:
+    """Ensure the commands directory for the given scope exists, creating it when absent.
+
+        Returns the absolute path to the directory.
+
+    """
     directory = get_scope_directory(project_name, "")
     Path(directory).mkdir(parents=True, exist_ok=True)
     return directory
@@ -188,6 +241,15 @@ def get_scope_payload(
     *,
     ensure_directory: bool = False,
 ) -> dict[str, Any]:
+    """Build a scope descriptor dict for the given project/agent context.
+
+        Returns a dict containing ``project_name``, ``scope_key``, ``scope_label``,
+        ``directory_path``, ``exists``, and the private ``_directory_abs_path`` key.
+
+        Args:
+            ensure_directory: When ``True``, create the directory if it does not exist.
+
+    """
     directory_path = (
         ensure_scope_directory(project_name, "")
         if ensure_directory
@@ -204,6 +266,11 @@ def get_scope_payload(
 
 
 def get_context_scope(context_id: str = "") -> dict[str, str]:
+    """Resolve the active project name for *context_id* and return a scope mapping.
+
+        Returns ``{"project_name": str}`` — empty string when no project is associated.
+
+    """
     context = _get_context(context_id)
     if not context:
         return {"project_name": ""}
@@ -217,6 +284,15 @@ def list_scope_commands(
     project_name: str = "",
     agent_profile: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """List all commands defined in *project_name* scope (not merged with global).
+
+        Each command entry includes ``override_scopes`` and ``override_count`` fields
+        indicating lower-scoped commands with the same name.
+
+        Returns:
+            Tuple of (commands list, stripped scope payload dict).
+
+    """
     scope = get_scope_payload(project_name, "")
     commands = _load_scope_commands(project_name)
     overrides = _collect_lower_scope_matches(project_name)
@@ -233,6 +309,15 @@ def list_effective_commands(
     project_name: str = "",
     agent_profile: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Return the merged effective command list for *project_name* scope.
+
+        Project-scoped commands take precedence over global commands of the same name.
+        Commands are sorted alphabetically by name.
+
+        Returns:
+            Tuple of (sorted commands list, stripped scope payload dict).
+
+    """
     resolved_scope = get_scope_payload(project_name, "")
     merged: dict[str, dict[str, Any]] = {}
 
@@ -249,8 +334,26 @@ def get_command(
     project_name: str = "",
     agent_profile: str = "",
 ) -> dict[str, Any]:
+    """Load and return a single command by its config file *path*.
+
+        Validates that *path* belongs to an effective scope for *project_name*.
+
+        Raises:
+            FileNotFoundError: If the command file does not exist.
+            ValueError: If the path is outside all valid scopes, not a recognised
+                config suffix, or the file content is invalid.
+
+    """
     command_path = _validate_command_path(path, project_name, "")
-    command = _load_command_file(command_path, project_name=project_name)
+    # Determine actual scope from the resolved path to get correct metadata.
+    # A global command loaded with a project context must report scope=global.
+    actual_project = ""
+    for scope in _iter_precedence_scopes(project_name):
+        scope_dir = get_scope_directory(scope, "")
+        if files.is_in_dir(command_path, scope_dir):
+            actual_project = scope
+            break
+    command = _load_command_file(command_path, project_name=actual_project)
     if not command:
         raise ValueError("Command file is invalid or missing required configuration")
     return command
@@ -269,6 +372,19 @@ def save_command(
     include_history: bool = False,
     extra_frontmatter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Create or update a command, writing both the config and content files.
+
+        When *existing_path* is provided, the old files are removed after the new
+        files are written (rename/move semantics).
+
+        Returns:
+            The fully-loaded command dict for the saved command.
+
+        Raises:
+            FileExistsError: If a command with the same name already exists in scope.
+            ValueError: If required fields are missing or values are invalid.
+
+    """
     command_name = sanitize_command_name(name)
     command_description = (description or "").strip()
     if not command_description:
@@ -340,6 +456,13 @@ def delete_command(
     project_name: str = "",
     agent_profile: str = "",
 ) -> None:
+    """Delete the config file and associated content file for *path*.
+
+        Raises:
+            FileNotFoundError: If the command file does not exist.
+            ValueError: If *path* is invalid or outside the allowed scope.
+
+    """
     command = get_command(path, project_name, "")
     command_path = _validate_command_path(path, project_name, "")
     files.delete_file(command_path)
@@ -354,6 +477,15 @@ def duplicate_command(
     project_name: str = "",
     agent_profile: str = "",
 ) -> dict[str, Any]:
+    """Duplicate an existing command, assigning it a unique ``-copy`` suffixed name.
+
+        Returns the newly created command dict.
+
+        Raises:
+            FileNotFoundError: If the source command does not exist.
+            ValueError: If the source path is invalid.
+
+    """
     command = get_command(path, project_name, "")
     duplicated_name = _generate_duplicate_name(command["name"], project_name=project_name)
     return save_command(
@@ -375,6 +507,23 @@ async def resolve_command_invocation(
     project_name: str = "",
     context_id: str = "",
 ) -> dict[str, Any]:
+    """Resolve a slash command invocation, executing text rendering or a Python script hook.
+
+        Args:
+            path: Path to the command config file.
+            slash_text: The full slash text entered by the user.
+            project_name: Active project name (empty string for global scope).'
+            context_id: Agent context ID, used for script commands that request history.
+
+        Returns:
+            Dict with keys ``command``, ``invocation``, and ``result``
+            (``{"text": str, "effects": list}``).
+
+        Raises:
+            FileNotFoundError: If the command file is not found.
+            ValueError: If path or slash_text is invalid.
+
+    """
     command = get_command(path, project_name, "")
     invocation = parse_slash_invocation(slash_text, fallback_command=command["name"])
 
@@ -487,8 +636,10 @@ def _load_yaml_command_file(
         command_name, command_type
     )
     content_abs_path = files.get_abs_path(directory_path, configured_content_path)
-    scope_root = get_scope_directory(project_name, "")
-    if not files.is_in_dir(content_abs_path, scope_root):
+    # Content file must live in the same directory as its config file.
+    # Using directory_path (not the project scope root) allows global commands
+    # to load correctly even when a project context is active.
+    if not files.is_in_dir(content_abs_path, directory_path):
         return None
 
     try:
@@ -577,8 +728,9 @@ def _validate_command_path(
     agent_profile: str = "",
 ) -> str:
     command_path = _to_abs_path(path)
-    scope_root = get_scope_directory(project_name, "")
-    if not files.is_in_dir(command_path, scope_root):
+    # Allow commands from any effective scope (project overrides global, but global is also valid)
+    valid_roots = [get_scope_directory(scope, "") for scope in _iter_precedence_scopes(project_name)]
+    if not any(files.is_in_dir(command_path, scope_root) for scope_root in valid_roots):
         raise ValueError("Command path is outside the selected scope")
     if not (
         command_path.endswith(COMMAND_CONFIG_SUFFIX)
@@ -888,6 +1040,7 @@ def _to_abs_path(path: str) -> str:
 
 
 def strip_private_scope(scope: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *scope* with all keys prefixed by ``_`` removed."""
     return {key: value for key, value in scope.items() if not key.startswith("_")}
 
 
