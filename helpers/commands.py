@@ -325,6 +325,9 @@ def list_effective_commands(
         for command in _load_scope_commands(scope_project):
             merged.setdefault(command["name"], command)
 
+    for command in _discover_plugin_commands():
+        merged.setdefault(command["name"], command)
+
     effective = sorted(merged.values(), key=lambda item: item["name"])
     return effective, strip_private_scope(resolved_scope)
 
@@ -344,7 +347,7 @@ def get_command(
                 config suffix, or the file content is invalid.
 
     """
-    command_path = _validate_command_path(path, project_name, "")
+    command_path = _validate_command_path(path, project_name, "", allow_plugin=True)
     # Determine actual scope from the resolved path to get correct metadata.
     # A global command loaded with a project context must report scope=global.
     actual_project = ""
@@ -356,6 +359,9 @@ def get_command(
     command = _load_command_file(command_path, project_name=actual_project)
     if not command:
         raise ValueError("Command file is invalid or missing required configuration")
+    plugin_name = _plugin_name_for_commands_path(command_path)
+    if plugin_name:
+        _mark_plugin_command(command, plugin_name)
     return command
 
 
@@ -726,12 +732,19 @@ def _validate_command_path(
     path: str,
     project_name: str = "",
     agent_profile: str = "",
+    *,
+    allow_plugin: bool = False,
 ) -> str:
     command_path = _to_abs_path(path)
     # Allow commands from any effective scope (project overrides global, but global is also valid)
     valid_roots = [get_scope_directory(scope, "") for scope in _iter_precedence_scopes(project_name)]
     if not any(files.is_in_dir(command_path, scope_root) for scope_root in valid_roots):
-        raise ValueError("Command path is outside the selected scope")
+        plugin_name = _plugin_name_for_commands_path(command_path)
+        if plugin_name:
+            if not allow_plugin:
+                raise ValueError("Plugin commands are read-only")
+        else:
+            raise ValueError("Command path is outside the selected scope")
     if not (
         command_path.endswith(COMMAND_CONFIG_SUFFIX)
         or command_path.endswith(LEGACY_COMMAND_FILE_SUFFIX)
@@ -771,6 +784,25 @@ def _load_scope_commands(project_name: str = "") -> list[dict[str, Any]]:
             commands.append(command)
 
     commands.sort(key=lambda item: item["name"])
+    return commands
+
+
+def _discover_plugin_commands() -> list[dict[str, Any]]:
+    """Discover commands contributed by installed plugins."""
+    commands: list[dict[str, Any]] = []
+    for plugin_name in plugins.get_plugins_list():
+        if plugin_name == PLUGIN_NAME:
+            continue
+        plugin_dir = plugins.find_plugin_dir(plugin_name)
+        if not plugin_dir:
+            continue
+        plugin_commands_dir = files.get_abs_path(plugin_dir, COMMANDS_DIR)
+        if not os.path.isdir(plugin_commands_dir):
+            continue
+        for file_path in _list_scope_files(plugin_commands_dir):
+            command = _load_command_file(file_path, project_name="")
+            if command:
+                commands.append(_mark_plugin_command(command, plugin_name))
     return commands
 
 
@@ -1037,6 +1069,39 @@ def _get_context(context_id: str = "") -> AgentContext | None:
 
 def _to_abs_path(path: str) -> str:
     return files.fix_dev_path(path)
+
+
+def _plugin_scope_label(plugin_name: str) -> str:
+    return f"Plugin: {plugin_name}"
+
+
+def _mark_plugin_command(command: dict[str, Any], plugin_name: str) -> dict[str, Any]:
+    scope_label = _plugin_scope_label(plugin_name)
+    command["source_plugin"] = plugin_name
+    command["scope_key"] = "plugin"
+    command["scope_label"] = scope_label
+    command["source_scope_key"] = "plugin"
+    command["source_scope_label"] = scope_label
+    return command
+
+
+def _plugin_name_for_commands_path(path: str) -> str:
+    abs_path = _to_abs_path(path)
+    for plugin_name in plugins.get_plugins_list():
+        if plugin_name == PLUGIN_NAME:
+            continue
+        plugin_dir = plugins.find_plugin_dir(plugin_name)
+        if not plugin_dir:
+            continue
+        plugin_commands_dir = files.get_abs_path(plugin_dir, COMMANDS_DIR)
+        if files.is_in_dir(abs_path, plugin_commands_dir):
+            return plugin_name
+    return ""
+
+
+def _is_plugin_commands_dir(path: str) -> bool:
+    """Check if a path is inside any installed plugin's commands/ subdirectory."""
+    return bool(_plugin_name_for_commands_path(path))
 
 
 def strip_private_scope(scope: dict[str, Any]) -> dict[str, Any]:
