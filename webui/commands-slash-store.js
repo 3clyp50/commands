@@ -93,11 +93,6 @@ const model = {
     return name ? `Create /${name}` : "Create slash command";
   },
 
-  get projectBadgeLabel() {
-    const projectName = this.contextScope?.project_name || "";
-    return projectName ? `Project: ${projectName}` : "Project: Global";
-  },
-
   onMount() {
     this.ensureBindings();
 
@@ -162,6 +157,27 @@ const model = {
     return document.getElementById("chat-input");
   },
 
+  getInputMessage(event = null) {
+    const target = event?.target || null;
+    const targetEditor = target?.closest?.("#chat-input");
+    if (targetEditor?.isContentEditable || target?.isContentEditable) {
+      return (
+        chatInputStore?._editorToMarkdown?.() ||
+        targetEditor?.textContent ||
+        target?.textContent ||
+        ""
+      );
+    }
+    if (typeof target?.value === "string") return target.value;
+
+    const input = this.getInputElement();
+    if (input?.isContentEditable) {
+      return chatInputStore?._editorToMarkdown?.() ?? input.textContent ?? "";
+    }
+    if (typeof input?.value === "string") return input.value;
+    return chatInputStore?.message ?? "";
+  },
+
   getContextId() {
     return chatsStore?.getSelectedChatId?.() || globalThis.getContext?.() || "";
   },
@@ -199,11 +215,7 @@ const model = {
     this.ensureBindings();
     this.dismissed = false;
 
-    const message =
-      event?.target?.value ??
-      this.getInputElement()?.value ??
-      chatInputStore?.message ??
-      "";
+    const message = this.getInputMessage(event);
     const parsed = parseSlashInput(message);
 
     this.active = parsed.active;
@@ -270,6 +282,15 @@ const model = {
     const nextIndex =
       (this.selectedIndex + delta + commands.length) % commands.length;
     this.selectedIndex = nextIndex;
+    this.scrollSelectedIntoView();
+  },
+
+  scrollSelectedIntoView() {
+    requestAnimationFrame(() => {
+      document
+        .querySelector(".commands-slash-results .commands-slash-item.active")
+        ?.scrollIntoView({ block: "nearest" });
+    });
   },
 
   async applySelection(command) {
@@ -307,7 +328,7 @@ const model = {
   applyResolution(resolution, input) {
     const result = resolution?.result || {};
     const hasText = typeof result.text === "string";
-    let nextText = hasText ? result.text : input.value || "";
+    let nextText = hasText ? result.text : this.getInputMessage();
     const effects = Array.isArray(result.effects) ? result.effects : [];
 
     for (const effect of effects) {
@@ -334,12 +355,16 @@ const model = {
       }
     }
 
-    input.value = nextText;
+    if (typeof input.value === "string") input.value = nextText;
     chatInputStore.message = nextText;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     chatInputStore.adjustTextareaHeight();
     input.focus();
-    input.setSelectionRange(nextText.length, nextText.length);
+    if (typeof input.setSelectionRange === "function") {
+      input.setSelectionRange(nextText.length, nextText.length);
+    } else {
+      chatInputStore?._setEditorCaret?.(nextText.length);
+    }
 
     this.active = false;
     this.dismissed = false;
