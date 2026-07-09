@@ -932,11 +932,6 @@ def _parse_short_flag_bundle(
         return 1
 
     key = _normalize_flag_name(short_token)
-    next_index = index + 1
-    if next_index < len(tokens) and not tokens[next_index].startswith("-"):
-        _set_flag_value(flags, key, tokens[next_index])
-        return 2
-
     _set_flag_value(flags, key, True)
     return 1
 
